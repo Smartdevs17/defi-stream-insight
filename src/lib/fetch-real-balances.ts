@@ -1,7 +1,6 @@
 import { createPublicClient, http, formatEther } from 'viem'
 import { somniaTestnet } from './wagmi-config'
 import { TokenBalance } from './somnia-sdk'
-import { getMockTokenBalances } from './mock-data'
 
 const rpcUrl = import.meta.env.VITE_SOMNIA_RPC_URL || 'https://dream-rpc.somnia.network'
 
@@ -18,13 +17,13 @@ export async function fetchRealTokenBalances(walletAddress: string): Promise<Tok
 
 		const sttBalance = parseFloat(formatEther(nativeBalance))
 		
-		if (sttBalance > 0.001) {
+		if (sttBalance > 0) {
 			const balances: TokenBalance[] = [
 				{
-					address: '0x0000000000000000000000000000000000000000',
+					address: walletAddress,
 					symbol: 'STT',
 					name: 'Somnia Test Token',
-					balance: sttBalance.toFixed(2),
+					balance: sttBalance.toLocaleString('en-US', { maximumFractionDigits: 6 }),
 					value: `$${sttBalance.toFixed(2)}`,
 					price: '$1.00',
 					change24h: 0.0,
@@ -37,7 +36,7 @@ export async function fetchRealTokenBalances(walletAddress: string): Promise<Tok
 
 		return []
 	} catch (error) {
-		console.warn('Failed to fetch real balances, using mock data:', error)
+		console.warn('Failed to fetch real balances:', error)
 		return []
 	}
 }
@@ -48,14 +47,16 @@ export async function getTokenBalances(walletAddress: string | null): Promise<To
 	try {
 		const realBalances = await fetchRealTokenBalances(walletAddress)
 		
+		// Only return real balances - no mock data
 		if (realBalances.length > 0) {
 			return realBalances
 		}
 		
-		return getMockTokenBalances(walletAddress)
+		// Return empty array - no mock data fallback
+		return []
 	} catch (error) {
-		console.warn('Error fetching balances, using mock data:', error)
-		return getMockTokenBalances(walletAddress)
+		console.warn('Error fetching balances:', error)
+		return []
 	}
 }
 

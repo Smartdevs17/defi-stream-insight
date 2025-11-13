@@ -13,9 +13,12 @@ const Settings = () => {
 	const navigate = useNavigate();
 
 	const handleDisconnect = () => {
+		// Set a flag in sessionStorage to indicate we just disconnected
+		// This will be checked by ConnectWallet to prevent false "connected" toast
+		sessionStorage.setItem('justDisconnected', 'true');
 		disconnect();
-		toast.success("Wallet disconnected");
-		navigate("/connect-wallet");
+		// Navigate immediately - wagmi will update state automatically
+		navigate("/connect-wallet", { replace: true });
 	};
 
 	const displayAddress = address 

@@ -13,9 +13,18 @@ const loadSDK = async () => {
 	return SDK
 }
 
-import { createPublicClient, createWalletClient, http, webSocket } from 'viem'
+import { createPublicClient, createWalletClient, http, webSocket, formatEther } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { somniaTestnet } from './wagmi-config'
+import {
+	transformBlockchainEventToTransaction,
+	transformToTokenBalance,
+	transformToPriceUpdate,
+	transformToYieldPosition,
+	isBlockchainEvent,
+	isBalanceData,
+	isPriceData,
+} from './data-transformer'
 
 export interface TokenBalance {
 	address: string
@@ -67,7 +76,7 @@ class SomniaDataStreams {
 	private sdkSubscriptions: Map<string, { unsubscribe: () => void }> = new Map()
 	private isInitialized = false
 
-	constructor(private rpcUrl: string) {}
+	constructor(private rpcUrl: string, private wsUrl: string) {}
 
 	async initialize(): Promise<void> {
 		if (this.isInitialized && this.sdk) {
@@ -84,26 +93,23 @@ class SomniaDataStreams {
 				throw new Error('Failed to load SDK class')
 			}
 
-			let transport
-			try {
-				const wsUrl = this.rpcUrl.replace('https://', 'wss://').replace('http://', 'ws://')
-				transport = webSocket(wsUrl)
-				console.log('Using WebSocket transport for subscriptions:', wsUrl)
-			} catch (error) {
-				console.warn('WebSocket transport not available, using HTTP:', error)
-				transport = http(this.rpcUrl)
-			}
+			// SDK requires WebSocket transport for subscriptions
+			// Use the provided WebSocket URL (should be wss://dream-rpc.somnia.network/ws)
+			const wsTransport = webSocket(this.wsUrl)
+			
+			console.log('Initializing SDK with WebSocket transport:', this.wsUrl)
 
+			// Public client MUST use WebSocket for SDK subscriptions to work
 			const publicClient = createPublicClient({
 				chain: somniaTestnet,
-				transport: transport,
+				transport: wsTransport,
 			})
 
 			const dummyAccount = privateKeyToAccount('0x0000000000000000000000000000000000000000000000000000000000000001' as `0x${string}`)
 			const walletClient = createWalletClient({
 				chain: somniaTestnet,
 				account: dummyAccount,
-				transport: http(this.rpcUrl),
+				transport: http(this.rpcUrl), // Wallet client can use HTTP
 			})
 
 			this.sdk = new SDKClass({
@@ -113,7 +119,7 @@ class SomniaDataStreams {
 			})
 
 			this.isInitialized = true
-			console.log('Somnia Data Streams SDK initialized')
+			console.log('Somnia Data Streams SDK initialized successfully')
 		} catch (error) {
 			console.error('Failed to initialize Somnia Data Streams SDK:', error)
 			throw error
@@ -132,23 +138,67 @@ class SomniaDataStreams {
 	): StreamUnsubscribe {
 		const streamId = `wallet:${walletAddress}:balances`
 		
+		let sdkUnsubscribe: (() => void) | null = null
+
 		const unsubscribe = () => {
-			const sdkSubscription = this.sdkSubscriptions.get(streamId)
-			if (sdkSubscription) {
-				sdkSubscription.unsubscribe()
-				this.sdkSubscriptions.delete(streamId)
+			if (sdkUnsubscribe) {
+				try {
+					sdkUnsubscribe()
+				} catch (error) {
+					console.error('Error unsubscribing from SDK:', error)
+				}
+				sdkUnsubscribe = null
 			}
+			this.sdkSubscriptions.delete(streamId)
 			this.subscriptions.delete(streamId)
 		}
 
-		this.ensureInitialized().then(() => {
-			if (!this.sdk) {
-				console.warn('SDK not initialized, using mock data')
-				return
-			}
-		}).catch((error) => {
-			console.error('Failed to subscribe to wallet balances:', error)
-		})
+		this.ensureInitialized()
+			.then(async () => {
+				if (!this.sdk || !this.sdk.streams) {
+					console.warn('SDK not initialized, using mock data')
+					return
+				}
+
+				try {
+					// Subscribe to balance updates for the wallet address
+					// Note: Initial balance is fetched in the hook via getTokenBalances()
+					// This subscription only handles real-time updates from the stream
+					const subscription = await this.sdk.streams.subscribe({
+						somniaStreamsEventId: undefined,
+						ethCalls: [],
+						context: `wallet-balances-${walletAddress}`,
+						onlyPushChanges: false,
+						onData: (data: any) => {
+							try {
+								// Use transformation layer
+								if (isBalanceData(data)) {
+									const balances = transformToTokenBalance(data, walletAddress)
+									if (balances.length > 0) {
+										callback(balances)
+									}
+								}
+							} catch (error) {
+								console.error('Error processing balance data:', error)
+							}
+						},
+						onError: (error: any) => {
+							console.error('Error in wallet balances stream:', error)
+						},
+					})
+
+					if (subscription && subscription.unsubscribe) {
+						sdkUnsubscribe = subscription.unsubscribe
+						this.sdkSubscriptions.set(streamId, { unsubscribe: sdkUnsubscribe })
+						console.log(`Subscribed to wallet balances for ${walletAddress}`)
+					}
+				} catch (error) {
+					console.error('Failed to subscribe to wallet balances via SDK:', error)
+				}
+			})
+			.catch((error) => {
+				console.error('Failed to initialize SDK for wallet balances:', error)
+			})
 
 		this.subscriptions.set(streamId, { unsubscribe })
 		return unsubscribe
@@ -160,23 +210,70 @@ class SomniaDataStreams {
 	): StreamUnsubscribe {
 		const streamId = `prices:${tokenAddresses.join(',')}`
 		
+		const sdkUnsubscribes: (() => void)[] = []
+
 		const unsubscribe = () => {
-			const sdkSubscription = this.sdkSubscriptions.get(streamId)
-			if (sdkSubscription) {
-				sdkSubscription.unsubscribe()
-				this.sdkSubscriptions.delete(streamId)
-			}
+			sdkUnsubscribes.forEach((unsub) => {
+				try {
+					unsub()
+				} catch (error) {
+					console.error('Error unsubscribing from SDK:', error)
+				}
+			})
+			sdkUnsubscribes.length = 0
+			this.sdkSubscriptions.delete(streamId)
 			this.subscriptions.delete(streamId)
 		}
 
-		this.ensureInitialized().then(() => {
-			if (!this.sdk) {
-				console.warn('SDK not initialized, using mock data')
-				return
-			}
-		}).catch((error) => {
-			console.error('Failed to subscribe to token prices:', error)
-		})
+		this.ensureInitialized()
+			.then(async () => {
+				if (!this.sdk || !this.sdk.streams) {
+					console.warn('SDK not initialized, using mock data')
+					return
+				}
+
+				try {
+					// Subscribe to price updates for each token
+					for (const tokenAddress of tokenAddresses) {
+						const subscription = await this.sdk.streams.subscribe({
+							somniaStreamsEventId: undefined,
+							ethCalls: [],
+							context: `token-price-${tokenAddress}`,
+							onlyPushChanges: false,
+							onData: (data: any) => {
+								try {
+									// Use transformation layer
+									if (isPriceData(data)) {
+										const priceUpdate = transformToPriceUpdate(data, tokenAddress)
+										if (priceUpdate) {
+											callback(priceUpdate)
+										}
+									}
+								} catch (error) {
+									console.error('Error processing price data:', error)
+								}
+							},
+							onError: (error: any) => {
+								console.error(`Error in price stream for ${tokenAddress}:`, error)
+							},
+						})
+						
+						if (subscription && subscription.unsubscribe) {
+							sdkUnsubscribes.push(subscription.unsubscribe)
+						}
+					}
+
+					if (sdkUnsubscribes.length > 0) {
+						this.sdkSubscriptions.set(streamId, { unsubscribe: () => unsubscribe() })
+						console.log(`Subscribed to prices for ${tokenAddresses.length} tokens`)
+					}
+				} catch (error) {
+					console.error('Failed to subscribe to token prices via SDK:', error)
+				}
+			})
+			.catch((error) => {
+				console.error('Failed to initialize SDK for token prices:', error)
+			})
 
 		this.subscriptions.set(streamId, { unsubscribe })
 		return unsubscribe
@@ -188,23 +285,77 @@ class SomniaDataStreams {
 	): StreamUnsubscribe {
 		const streamId = `wallet:${walletAddress}:transactions`
 		
+		let sdkUnsubscribe: (() => void) | null = null
+
 		const unsubscribe = () => {
-			const sdkSubscription = this.sdkSubscriptions.get(streamId)
-			if (sdkSubscription) {
-				sdkSubscription.unsubscribe()
-				this.sdkSubscriptions.delete(streamId)
+			if (sdkUnsubscribe) {
+				try {
+					sdkUnsubscribe()
+				} catch (error) {
+					console.error('Error unsubscribing from SDK:', error)
+				}
+				sdkUnsubscribe = null
 			}
+			this.sdkSubscriptions.delete(streamId)
 			this.subscriptions.delete(streamId)
 		}
 
-		this.ensureInitialized().then(() => {
-			if (!this.sdk) {
-				console.warn('SDK not initialized, using mock data')
-				return
-			}
-		}).catch((error) => {
-			console.error('Failed to subscribe to transactions:', error)
-		})
+		this.ensureInitialized()
+			.then(async () => {
+				if (!this.sdk || !this.sdk.streams) {
+					console.warn('SDK not initialized, using mock data')
+					return
+				}
+
+				try {
+					const subscription = await this.sdk.streams.subscribe({
+						somniaStreamsEventId: undefined,
+						ethCalls: [],
+						context: `wallet-transactions-${walletAddress}`,
+						onlyPushChanges: false,
+						onData: (data: any) => {
+							try {
+								// Use transformation layer
+								if (isBlockchainEvent(data)) {
+									const transaction = transformBlockchainEventToTransaction(data)
+									if (transaction) {
+										callback(transaction)
+									}
+								} else if (data && typeof data === 'object' && (data.hash || data.txHash)) {
+									// Already formatted transaction
+									const transaction: Transaction = {
+										hash: data.hash || data.txHash || '',
+										type: data.type || 'Received',
+										token: data.token || 'STT',
+										amount: data.amount || '0',
+										timestamp: data.timestamp || Math.floor(Date.now() / 1000),
+										status: data.status || 'confirmed',
+										from: data.from,
+										to: data.to,
+									}
+									callback(transaction)
+								}
+							} catch (error) {
+								console.error('Error processing transaction data:', error)
+							}
+						},
+						onError: (error: any) => {
+							console.error('Error in transaction stream:', error)
+						},
+					})
+
+					if (subscription && subscription.unsubscribe) {
+						sdkUnsubscribe = subscription.unsubscribe
+						this.sdkSubscriptions.set(streamId, { unsubscribe: sdkUnsubscribe })
+						console.log(`Subscribed to transactions for ${walletAddress}`)
+					}
+				} catch (error) {
+					console.error('Failed to subscribe to transactions via SDK:', error)
+				}
+			})
+			.catch((error) => {
+				console.error('Failed to initialize SDK for transactions:', error)
+			})
 
 		this.subscriptions.set(streamId, { unsubscribe })
 		return unsubscribe
@@ -216,23 +367,62 @@ class SomniaDataStreams {
 	): StreamUnsubscribe {
 		const streamId = `wallet:${walletAddress}:yield`
 		
+		let sdkUnsubscribe: (() => void) | null = null
+
 		const unsubscribe = () => {
-			const sdkSubscription = this.sdkSubscriptions.get(streamId)
-			if (sdkSubscription) {
-				sdkSubscription.unsubscribe()
-				this.sdkSubscriptions.delete(streamId)
+			if (sdkUnsubscribe) {
+				try {
+					sdkUnsubscribe()
+				} catch (error) {
+					console.error('Error unsubscribing from SDK:', error)
+				}
+				sdkUnsubscribe = null
 			}
+			this.sdkSubscriptions.delete(streamId)
 			this.subscriptions.delete(streamId)
 		}
 
-		this.ensureInitialized().then(() => {
-			if (!this.sdk) {
-				console.warn('SDK not initialized, using mock data')
-				return
-			}
-		}).catch((error) => {
-			console.error('Failed to subscribe to yield positions:', error)
-		})
+		this.ensureInitialized()
+			.then(async () => {
+				if (!this.sdk || !this.sdk.streams) {
+					console.warn('SDK not initialized, using mock data')
+					return
+				}
+
+				try {
+					const subscription = await this.sdk.streams.subscribe({
+						somniaStreamsEventId: undefined,
+						ethCalls: [],
+						context: `wallet-yield-${walletAddress}`,
+						onlyPushChanges: false,
+						onData: (data: any) => {
+							try {
+								// Use transformation layer
+								const positions = transformToYieldPosition(data)
+								if (positions.length > 0) {
+									callback(positions)
+								}
+							} catch (error) {
+								console.error('Error processing yield position data:', error)
+							}
+						},
+						onError: (error: any) => {
+							console.error('Error in yield position stream:', error)
+						},
+					})
+
+					if (subscription && subscription.unsubscribe) {
+						sdkUnsubscribe = subscription.unsubscribe
+						this.sdkSubscriptions.set(streamId, { unsubscribe: sdkUnsubscribe })
+						console.log(`Subscribed to yield positions for ${walletAddress}`)
+					}
+				} catch (error) {
+					console.error('Failed to subscribe to yield positions via SDK:', error)
+				}
+			})
+			.catch((error) => {
+				console.error('Failed to initialize SDK for yield positions:', error)
+			})
 
 		this.subscriptions.set(streamId, { unsubscribe })
 		return unsubscribe
@@ -269,4 +459,12 @@ const getRpcUrl = (): string => {
 	return 'https://dream-rpc.somnia.network'
 }
 
-export const somniaStreams = new SomniaDataStreams(getRpcUrl())
+const getWsUrl = (): string => {
+	const envWsUrl = import.meta.env.VITE_SOMNIA_WS_URL
+	if (envWsUrl) {
+		return envWsUrl
+	}
+	return 'wss://dream-rpc.somnia.network/ws'
+}
+
+export const somniaStreams = new SomniaDataStreams(getRpcUrl(), getWsUrl())

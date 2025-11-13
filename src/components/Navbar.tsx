@@ -3,13 +3,12 @@ import { Wallet, Activity, TrendingUp, Bell, Settings, BookOpen, LogOut } from "
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useWallet } from "@/contexts/WalletContext";
-import { useDisconnect } from "wagmi";
+import { useEffect } from "react";
 
 const Navbar = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { address, isConnected } = useWallet();
-  const { disconnect } = useDisconnect();
+  const { address, isConnected, disconnect } = useWallet();
   const isActive = (path: string) => location.pathname === path;
 
   const navItems = [
@@ -24,9 +23,20 @@ const Navbar = () => {
     : "";
 
   const handleDisconnect = () => {
+    // Set a flag in sessionStorage to indicate we just disconnected
+    // This will be checked by ConnectWallet to prevent false "connected" toast
+    sessionStorage.setItem('justDisconnected', 'true');
     disconnect();
-    navigate("/connect-wallet");
+    // Navigate immediately - wagmi will update state automatically
+    navigate("/connect-wallet", { replace: true });
   };
+
+  // Navigate to connect wallet if disconnected while on protected routes
+  useEffect(() => {
+    if (!isConnected && !address && location.pathname !== "/connect-wallet" && location.pathname !== "/" && location.pathname !== "/about") {
+      navigate("/connect-wallet", { replace: true });
+    }
+  }, [isConnected, address, location.pathname, navigate]);
 
   return (
     <nav className="glass fixed top-0 left-0 right-0 z-50 border-b border-border">

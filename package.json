@@ -8,7 +8,11 @@
     "build": "vite build",
     "build:dev": "vite build --mode development",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:somnia": "tsx scripts/test-somnia-connection.ts",
+    "test:somnia:subscribe": "tsx scripts/test-somnia-subscribe-working.ts",
+    "test:data-transform": "tsx scripts/test-real-data-transformation.ts",
+    "find:staking": "tsx scripts/find-staking-contracts.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
@@ -81,6 +85,7 @@
     "globals": "^15.15.0",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.17",
+    "tsx": "^4.20.6",
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.38.0",
     "vite": "^5.4.19"

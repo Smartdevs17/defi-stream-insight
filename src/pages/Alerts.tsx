@@ -1,13 +1,14 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Bell, Plus, Trash2, TrendingUp, TrendingDown } from "lucide-react";
+import { Bell, Plus, Trash2, TrendingUp, TrendingDown, Zap, Volume2, VolumeX } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { useTokenPrices } from "@/hooks/use-somnia-streams";
+import { Switch } from "@/components/ui/switch";
 
 interface Alert {
 	id: number;
@@ -18,6 +19,8 @@ interface Alert {
 	status: "active" | "paused";
 	triggered: boolean;
 	triggeredAt?: number;
+	soundEnabled?: boolean;
+	instantTrigger?: boolean;
 }
 
 const TOKEN_ADDRESSES: Record<string, string> = {
@@ -27,6 +30,13 @@ const TOKEN_ADDRESSES: Record<string, string> = {
 	LINK: "0x0000000000000000000000000000000000000003", // Placeholder
 	UNI: "0x0000000000000000000000000000000000000004", // Placeholder
 };
+
+const ALERT_PRESETS = [
+	{ token: "ETH", condition: "above" as const, targetPrice: 2000, label: "ETH above $2,000" },
+	{ token: "ETH", condition: "below" as const, targetPrice: 1500, label: "ETH below $1,500" },
+	{ token: "BTC", condition: "above" as const, targetPrice: 50000, label: "BTC above $50,000" },
+	{ token: "USDC", condition: "below" as const, targetPrice: 0.99, label: "USDC below $0.99" },
+];
 
 const Alerts = () => {
 	const [alerts, setAlerts] = useState<Alert[]>(() => {
@@ -41,6 +51,12 @@ const Alerts = () => {
 		}
 		return [];
 	});
+	const [soundEnabled, setSoundEnabled] = useState(() => {
+		const saved = localStorage.getItem('alert_sound_enabled');
+		return saved ? JSON.parse(saved) : true;
+	});
+	const audioContextRef = useRef<AudioContext | null>(null);
+	const triggeredAlertsRef = useRef<Set<number>>(new Set());
 
 	// Get token addresses for price subscriptions
 	const tokenAddresses = useMemo(() => {
@@ -52,7 +68,44 @@ const Alerts = () => {
 
 	const { prices } = useTokenPrices(tokenAddresses);
 
-	// Check alerts against real-time prices
+	// Initialize audio context for sound alerts
+	useEffect(() => {
+		if (typeof window !== 'undefined' && 'AudioContext' in window) {
+			audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+		}
+		return () => {
+			if (audioContextRef.current) {
+				audioContextRef.current.close();
+			}
+		};
+	}, []);
+
+	// Play alert sound
+	const playAlertSound = useCallback(() => {
+		if (!soundEnabled || !audioContextRef.current) return;
+
+		try {
+			const ctx = audioContextRef.current;
+			const oscillator = ctx.createOscillator();
+			const gainNode = ctx.createGain();
+
+			oscillator.connect(gainNode);
+			gainNode.connect(ctx.destination);
+
+			oscillator.frequency.value = 800;
+			oscillator.type = 'sine';
+
+			gainNode.gain.setValueAtTime(0.3, ctx.currentTime);
+			gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
+
+			oscillator.start(ctx.currentTime);
+			oscillator.stop(ctx.currentTime + 0.5);
+		} catch (error) {
+			console.warn('Failed to play alert sound:', error);
+		}
+	}, [soundEnabled]);
+
+	// Check alerts against real-time prices with instant triggers
 	useEffect(() => {
 		if (prices.size === 0) return;
 
@@ -68,9 +121,34 @@ const Alerts = () => {
 					? currentPrice >= alert.targetPrice
 					: currentPrice <= alert.targetPrice;
 
-				if (shouldTrigger && !alert.triggered) {
+				if (shouldTrigger && !alert.triggered && !triggeredAlertsRef.current.has(alert.id)) {
+					triggeredAlertsRef.current.add(alert.id);
+
+					// Instant visual feedback
+					const alertElement = document.getElementById(`alert-${alert.id}`);
+					if (alertElement) {
+						alertElement.classList.add('animate-pulse', 'ring-2', 'ring-accent');
+						setTimeout(() => {
+							alertElement.classList.remove('animate-pulse', 'ring-2', 'ring-accent');
+						}, 2000);
+					}
+
+					// Play sound if enabled
+					if (alert.soundEnabled !== false) {
+						playAlertSound();
+					}
+
+					// Show toast with instant feedback
 					toast.success(`${alert.token} price alert triggered!`, {
 						description: `Price is ${alert.condition} $${alert.targetPrice.toLocaleString()}`,
+						duration: 5000,
+						action: {
+							label: 'View',
+							onClick: () => {
+								const element = document.getElementById(`alert-${alert.id}`);
+								element?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+							},
+						},
 					});
 					
 					// Show browser notification if permission granted
@@ -78,6 +156,8 @@ const Alerts = () => {
 						new Notification(`${alert.token} Price Alert`, {
 							body: `Price is ${alert.condition} $${alert.targetPrice.toLocaleString()}`,
 							icon: '/favicon.ico',
+							tag: `alert-${alert.id}`,
+							requireInteraction: true,
 						});
 					}
 
@@ -95,7 +175,7 @@ const Alerts = () => {
 			localStorage.setItem('price_alerts', JSON.stringify(updated));
 			return updated;
 		});
-	}, [prices]);
+	}, [prices, playAlertSound]);
 
 	// Request notification permission on mount
 	useEffect(() => {
@@ -104,13 +184,31 @@ const Alerts = () => {
 		}
 	}, []);
 
+	// Save sound preference
+	useEffect(() => {
+		localStorage.setItem('alert_sound_enabled', JSON.stringify(soundEnabled));
+	}, [soundEnabled]);
+
 	const handleDeleteAlert = (id: number) => {
 		setAlerts(prev => {
 			const updated = prev.filter(alert => alert.id !== id);
 			localStorage.setItem('price_alerts', JSON.stringify(updated));
 			return updated;
 		});
+		triggeredAlertsRef.current.delete(id);
 		toast.success("Alert deleted successfully");
+	};
+
+	const handleToggleSound = (alertId: number) => {
+		setAlerts(prev => {
+			const updated = prev.map(alert => 
+				alert.id === alertId 
+					? { ...alert, soundEnabled: !alert.soundEnabled }
+					: alert
+			);
+			localStorage.setItem('price_alerts', JSON.stringify(updated));
+			return updated;
+		});
 	};
 
 	const [selectedToken, setSelectedToken] = useState<string>("");
@@ -137,6 +235,8 @@ const Alerts = () => {
 			targetPrice: parseFloat(targetPrice),
 			status: "active",
 			triggered: false,
+			soundEnabled: soundEnabled,
+			instantTrigger: true,
 		};
 
 		setAlerts(prev => {
@@ -165,6 +265,27 @@ const Alerts = () => {
           <p className="text-sm text-muted-foreground mt-1">
             Real-time price monitoring powered by Somnia Data Streams
           </p>
+          <div className="flex items-center gap-4 mt-4">
+            <div className="flex items-center gap-2">
+              <Label htmlFor="global-sound" className="cursor-pointer flex items-center gap-2">
+                {soundEnabled ? (
+                  <Volume2 className="w-4 h-4 text-accent" />
+                ) : (
+                  <VolumeX className="w-4 h-4 text-muted-foreground" />
+                )}
+                <span className="text-sm">Sound Alerts</span>
+              </Label>
+              <Switch
+                id="global-sound"
+                checked={soundEnabled}
+                onCheckedChange={setSoundEnabled}
+              />
+            </div>
+            <Badge variant="outline" className="glass border-border gap-1">
+              <Zap className="w-3 h-3 text-accent" />
+              Instant Triggers Enabled
+            </Badge>
+          </div>
         </div>
 
         <div className="grid lg:grid-cols-2 gap-6 mb-8">
@@ -218,25 +339,48 @@ const Alerts = () => {
               </div>
 
               <div className="space-y-2">
-                <Label>Notification Type</Label>
-                <Select>
-                  <SelectTrigger className="glass border-border">
-                    <SelectValue placeholder="Select notification type" />
-                  </SelectTrigger>
-                  <SelectContent className="glass border-border">
-                    <SelectItem value="browser">Browser Notification</SelectItem>
-                    <SelectItem value="email">Email</SelectItem>
-                    <SelectItem value="both">Both</SelectItem>
-                  </SelectContent>
-                </Select>
+                <div className="flex items-center justify-between">
+                  <Label>Sound Alert</Label>
+                  <Switch
+                    checked={soundEnabled}
+                    onCheckedChange={setSoundEnabled}
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Play sound when alert triggers
+                </p>
               </div>
 
               <Button
                 className="w-full bg-gradient-accent hover:opacity-90"
                 onClick={handleCreateAlert}
               >
+                <Zap className="w-4 h-4 mr-2" />
                 Create Alert
               </Button>
+
+              <div className="pt-4 border-t border-border">
+                <Label className="text-sm mb-2 block">Quick Presets</Label>
+                <div className="grid grid-cols-2 gap-2">
+                  {ALERT_PRESETS.map((preset, idx) => (
+                    <Button
+                      key={idx}
+                      variant="outline"
+                      className="glass border-border text-xs h-auto py-2"
+                      onClick={() => {
+                       	setSelectedToken(preset.token)
+						setSelectedCondition(preset.condition)
+						setTargetPrice(preset.targetPrice.toString())
+						toast.success("Preset applied", {
+							description: preset.label,
+						})
+                      }}
+                    >
+                      {preset.label}
+                    </Button>
+                  ))}
+                </div>
+              </div>
             </CardContent>
           </Card>
 
@@ -310,8 +454,13 @@ const Alerts = () => {
 
                   return (
                     <div
+                      id={`alert-${alert.id}`}
                       key={alert.id}
-                      className="flex items-center justify-between p-4 glass rounded-lg border border-border hover:border-primary/50 transition-all"
+                      className={`flex items-center justify-between p-4 glass rounded-lg border transition-all ${
+                        alert.triggered
+                          ? 'border-accent/50 bg-accent/5'
+                          : 'border-border hover:border-primary/50'
+                      }`}
                     >
                       <div className="flex items-center gap-4">
                         <div
@@ -341,7 +490,8 @@ const Alerts = () => {
                       </div>
                       <div className="flex items-center gap-3">
                         {alert.triggered ? (
-                          <Badge className="bg-accent/20 text-accent border-accent/30">
+                          <Badge className="bg-accent/20 text-accent border-accent/30 gap-1">
+                            <Zap className="w-3 h-3" />
                             Triggered
                           </Badge>
                         ) : (
@@ -349,6 +499,19 @@ const Alerts = () => {
                             Active
                           </Badge>
                         )}
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="hover:bg-muted"
+                          onClick={() => handleToggleSound(alert.id)}
+                          title={alert.soundEnabled !== false ? "Sound enabled" : "Sound disabled"}
+                        >
+                          {alert.soundEnabled !== false ? (
+                            <Volume2 className="w-4 h-4 text-accent" />
+                          ) : (
+                            <VolumeX className="w-4 h-4 text-muted-foreground" />
+                          )}
+                        </Button>
                         <Button
                           size="icon"
                           variant="ghost"

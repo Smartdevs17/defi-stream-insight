@@ -40,6 +40,19 @@ const ConnectWallet = () => {
 	const { switchChain } = useSwitchChain();
 	const wasConnectedRef = useRef(false);
 	const hasShownToastRef = useRef(false);
+	const justDisconnectedRef = useRef(false);
+
+	// Check if we just disconnected when component mounts
+	useEffect(() => {
+		if (sessionStorage.getItem('justDisconnected') === 'true') {
+			justDisconnectedRef.current = true;
+			sessionStorage.removeItem('justDisconnected');
+			// Clear the flag after a delay to allow for legitimate reconnections
+			setTimeout(() => {
+				justDisconnectedRef.current = false;
+			}, 2000);
+		}
+	}, []);
 
 	const availableConnectors = useMemo(() => {
 		const seen = new Set<string>();
@@ -70,11 +83,24 @@ const ConnectWallet = () => {
 		if (!isConnected) {
 			wasConnectedRef.current = false;
 			hasShownToastRef.current = false;
+			// If we just disconnected, set a flag to prevent showing "connected" toast
+			if (justDisconnectedRef.current) {
+				justDisconnectedRef.current = false;
+				// Reset after a short delay to allow for reconnection
+				setTimeout(() => {
+					justDisconnectedRef.current = false;
+				}, 1000);
+			}
 		}
 	}, [isConnected]);
 
 	useEffect(() => {
 		if (isConnected && address && !wasConnectedRef.current) {
+			// Don't show toast if we just disconnected (prevent false positive)
+			if (justDisconnectedRef.current) {
+				return;
+			}
+			
 			wasConnectedRef.current = true;
 			
 			if (chainId !== somniaTestnet.id) {
@@ -93,6 +119,11 @@ const ConnectWallet = () => {
 
 	useEffect(() => {
 		if (isConnected && chainId === somniaTestnet.id && wasConnectedRef.current && !hasShownToastRef.current) {
+			// Don't show toast if we just disconnected (prevent false positive)
+			if (justDisconnectedRef.current) {
+				return;
+			}
+			
 			toast.success("Connected to Somnia Testnet!");
 			hasShownToastRef.current = true;
 			setTimeout(() => {

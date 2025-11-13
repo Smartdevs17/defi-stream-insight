@@ -10,20 +10,26 @@ import { defineChain } from 'viem'
 export const somniaTestnet = defineChain({
 	id: Number(import.meta.env.VITE_SOMNIA_CHAIN_ID) || 50312,
 	name: 'Somnia Testnet',
+	network: 'somnia-testnet',
 	nativeCurrency: {
 		decimals: 18,
-		name: 'STT',
+		name: 'Somnia Testnet Token',
 		symbol: 'STT',
 	},
 	rpcUrls: {
 		default: {
 			http: [import.meta.env.VITE_SOMNIA_RPC_URL || 'https://dream-rpc.somnia.network'],
+			webSocket: [import.meta.env.VITE_SOMNIA_WS_URL || 'wss://dream-rpc.somnia.network/ws'],
+		},
+		public: {
+			http: [import.meta.env.VITE_SOMNIA_RPC_URL || 'https://dream-rpc.somnia.network'],
+			webSocket: [import.meta.env.VITE_SOMNIA_WS_URL || 'wss://dream-rpc.somnia.network/ws'],
 		},
 	},
 	blockExplorers: {
 		default: {
-			name: 'Shannon Explorer',
-			url: import.meta.env.VITE_SOMNIA_EXPLORER_URL || 'https://shannon-explorer.somnia.network',
+			name: 'Somnia Explorer',
+			url: import.meta.env.VITE_SOMNIA_EXPLORER_URL || 'https://somnia-testnet.socialscan.io',
 		},
 	},
 	testnet: true,

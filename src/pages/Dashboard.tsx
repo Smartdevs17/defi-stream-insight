@@ -29,7 +29,9 @@ const Dashboard = () => {
 
 	const formatTransactionTime = (timestamp: number) => {
 		try {
-			return formatDistanceToNow(new Date(timestamp * 1000), { addSuffix: true });
+			const distance = formatDistanceToNow(new Date(timestamp * 1000), { addSuffix: true });
+			// Fix "1 minutes" to "1 minute" (date-fns sometimes returns plural incorrectly)
+			return distance.replace(/\b1 minutes\b/, '1 minute');
 		} catch {
 			return "Recently";
 		}
@@ -139,9 +141,9 @@ const Dashboard = () => {
               </div>
             ) : (
               <div className="space-y-4">
-                {balances.map((token) => (
+                {balances.map((token, index) => (
                   <div
-                    key={token.address}
+                    key={token.address && token.address.trim() ? token.address : `token-${index}-${token.symbol || 'unknown'}`}
                     className="flex items-center justify-between p-4 glass rounded-lg border border-border hover:border-primary/50 transition-all cursor-pointer group"
                   >
                     <div className="flex items-center gap-4">
@@ -190,9 +192,9 @@ const Dashboard = () => {
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {transactions.map((tx) => (
+                  {transactions.map((tx, index) => (
                     <div
-                      key={tx.hash}
+                      key={tx.hash && tx.hash.trim() ? tx.hash : `tx-${index}-${tx.timestamp || Date.now()}`}
                       className="flex items-center justify-between p-3 glass rounded-lg border border-border"
                     >
                       <div>

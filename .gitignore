@@ -32,3 +32,8 @@ dist-ssr
 # Build outputs
 .vite
 build
+
+# Lock files (use package-lock.json for npm)
+bun.lockb
+yarn.lock
+pnpm-lock.yaml

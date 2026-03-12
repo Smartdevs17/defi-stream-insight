@@ -1,14 +1,13 @@
-# DeFi Stream Insight
+# Somnia Reactor: Autonomous DeFi Intelligence Engine
 
-A monitoring dashboard for DeFi portfolios that showcases real-time token balances, yield performance, and transaction flows powered by **Somnia Data Streams**.
+An autonomous, event-driven DeFi intelligence system powered by **Somnia Reactivity**. Somnia Reactor doesn't just monitor; it reactively optimizes yield and protects your portfolio with sub-second latency.
 
-## 🚀 Features
+## 🚀 Reactive Features
 
-- **Real-Time Portfolio Tracking**: Live updates of token balances and portfolio values
-- **Transaction Monitoring**: Real-time transaction stream from connected wallets
-- **Yield Farming Dashboard**: Track staking positions and rewards in real-time
-- **Price Alerts**: Set up alerts that trigger based on real-time price updates
-- **Somnia Testnet Integration**: Fully deployed and tested on Somnia testnet
+- **Autonomous Intelligence Engine**: Real-time evaluation of on-chain conditions via `BlockTick` triggers.
+- **Atomic Portfolio Guard**: Zero-latency response to liquidations and volatility events.
+- **Intent-Based Optimization**: Automated yield capture and arbitrage detection.
+- **Somnia Reactivity Integration**: Leverages atomic subscriptions for 100% state consistency.
 
 ## 🏗️ Somnia Data Streams Integration
 
